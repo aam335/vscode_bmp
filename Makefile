@@ -3,9 +3,10 @@ PROJNAME := bmp2tcps
 WARNINGS := -Wall
 CFLAGS =-g -std=c99 $(WARNINGS) -D_GNU_SOURCE -D__USE_XOPEN2K
 CC=gcc
-USERLIBS = $(SYSLIBS) -lev
-DEPLIBS =
-LDLIBS = -lev
+
+
+LDLIBS += -lusb-1.0 -lpthread
+
 
 SRC  := $(wildcard *.c)               # list of source files
 OBJS := $(patsubst %.c, .obj/%.o, $(SRC)) # list of object files
