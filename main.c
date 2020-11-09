@@ -36,17 +36,17 @@
 #define ENDPOINT (0x85)
 
 #define TRANSFER_SIZE (64)
+#define MAX_PACKET_LEN 5
 
 #define MAX_RECEIVERS 64
-#define MAX_PACKET_LEN 5
+
 
 #define PORT 6018
 #define SA struct sockaddr
 
-
 #define ERROR_CREATE_THREAD -11
-#define ERROR_JOIN_THREAD   -12
-#define SUCCESS               0
+#define ERROR_JOIN_THREAD -12
+#define SUCCESS 0
 
 uint32_t crStaticVar_pp = 0;
 uint32_t pp(int c);
@@ -94,6 +94,7 @@ int usb_feeder(void)
 
         if (libusb_claim_interface(handle, INTERFACE) < 0)
             continue;
+        // printf("Usb connected\n");
 
         while (0 == libusb_bulk_transfer(handle, ENDPOINT, cbw, TRANSFER_SIZE, &size, 10))
         {
@@ -127,12 +128,12 @@ int main()
         printf("\ncan't create thread :[%s]", strerror(err));
         exit(ERROR_CREATE_THREAD);
     }
-    err = pthread_join(tcplistener, NULL);
-    if (err != SUCCESS)
-    {
-        printf("\ncan't join thread :[%s]", strerror(err));
-        exit(ERROR_JOIN_THREAD);
-    }
+    // err = pthread_join(tcplistener, NULL);
+    // if (err != SUCCESS)
+    // {
+    //     printf("\ncan't join thread :[%s]", strerror(err));
+    //     exit(ERROR_JOIN_THREAD);
+    // }
     exit(usb_feeder());
 }
 
@@ -143,15 +144,17 @@ void put_packet();
 #endif
 #define crStaticVar crStaticVar_pp
 
-uint8_t rxPacket[MAX_PACKET_LEN];
-int rx_ptr, rx_count;
-bool rx0_x80_term;
+uint8_t rxPacket[TRANSFER_SIZE];
+int rx_ptr, rx_count,rx_maxlen;
+bool rx0_x80_term, rx_sync;
 uint32_t pp(int c)
 {
     crBegin;
     rx_count = 0;
     rx_ptr = 0;
     rx0_x80_term = false;
+    rx_sync = false;
+    rx_maxlen=MAX_PACKET_LEN;
 
     // identify packet
     if (c == 0b01110000)
@@ -167,7 +170,10 @@ uint32_t pp(int c)
     rxPacket[rx_ptr++] = c;
     if (c == 0) // sync
     {
-        rx_count = 5;
+        // rx_count = 5;
+        rx_maxlen=TRANSFER_SIZE;
+        rx_sync = true;
+        rx0_x80_term = true;
     }
     else if ((c & 0xf) == 0)
     { // timestamp ()
@@ -185,19 +191,24 @@ uint32_t pp(int c)
     crReturn(0);
     // read packet data
 
-    if (rx_ptr >= MAX_PACKET_LEN)
+    if (rx_ptr >= rx_maxlen)
     { // error?
         fprintf(stderr, "Packet overflow!\n");
         goto restart;
     }
-
-    rxPacket[rx_ptr++] = c;
-
-    if (!((rx0_x80_term && ((c & 0x80) == 0)) || rx_ptr == rx_count))
+    // if (!rx_sync)
+    // {
+        rxPacket[rx_ptr++] = c;
+    // }
+    if ((rx0_x80_term && (c & 0x80) == 0) || rx_ptr < rx_count)
     {
         return 0;
     }
-    put_packet();
+
+    // if (!rx_sync)
+    // {
+        put_packet();
+    // }
 
     crFinish;
 restart:
@@ -209,10 +220,12 @@ restart:
 void put_packet()
 {
     // packet out
-    // for (int i = 0; i < rx_count; i++)
-    // {
-    //     printf("%02x ", rxPacket[i]);
-    // }
+    if (rxPacket[0] == 1)
+        for (int i = 1; i < rx_count; i++)
+        {
+            // printf(" ", rxPacket[i]);
+            putchar(rxPacket[i]);
+        }
     // printf("\n");
     //
     pthread_mutex_lock(&lock);
@@ -220,7 +233,8 @@ void put_packet()
     {
         if (fds[i] != 0)
         {
-            if (write(fds[i], rxPacket, rx_ptr) != rx_ptr)
+            // if (write(fds[i], rxPacket, rx_ptr) != rx_ptr)
+            if (send(fds[i], rxPacket, rx_ptr, MSG_NOSIGNAL)!= rx_ptr)
             {
                 close(fds[i]);
                 fds[i] = 0;
@@ -238,6 +252,7 @@ void add_downstream(int fd)
         if (fds[i] == 0)
         {
             fds[i] = fd;
+            break;
         }
     }
     if (i == MAX_RECEIVERS)
@@ -247,7 +262,7 @@ void add_downstream(int fd)
     pthread_mutex_unlock(&lock);
 }
 
-void* tcp_server(void *arg)
+void *tcp_server(void *arg)
 {
     int sockfd, connfd;
     socklen_t len;
